@@ -29,15 +29,92 @@ interface SearchResponse {
   indice_usado?: string; // Añadido para evitar error de propiedad faltante
 }
 
-// Componente SearchSection simplificado
+// Componente SearchSection con búsqueda avanzada
 const SearchSection: React.FC = () => {
   const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [searchResults, setSearchResults] = useState<Curso[]>([])
+  const [showDropdown, setShowDropdown] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(-1)
+  const [cartItems, setCartItems] = useState<string[]>([])
+  const searchRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
-  // Función de búsqueda simplificada
+  // Cargar items del carrito
+  useEffect(() => {
+    loadCartItems()
+  }, [])
+
+  // Cerrar dropdown al hacer click fuera
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setShowDropdown(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const loadCartItems = () => {
+    const cart = JSON.parse(localStorage.getItem('cart') || '[]')
+    setCartItems(cart.map((item: any) => item.id))
+  }
+
+  // Función de búsqueda con API
+  const buscarCursos = async (searchTerm: string) => {
+    if (!searchTerm.trim() || searchTerm.length < 2) {
+      setSearchResults([])
+      setShowDropdown(false)
+      return
+    }
+
+    setIsLoading(true)
+    
+    try {
+      const token = sessionStorage.getItem('educloud_token') || localStorage.getItem('educloud_token')
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = token
+
+      const response = await fetch(
+        `https://r9ttk3it54.execute-api.us-east-1.amazonaws.com/dev/cursos/buscar-avanzado?q=${encodeURIComponent(searchTerm)}&tipo=autocomplete&limit=8`,
+        { method: 'GET', headers }
+      )
+
+      if (response.ok) {
+        const data: SearchResponse = await response.json()
+        setSearchResults(data.cursos || [])
+        setShowDropdown(true)
+        setSelectedIndex(-1)
+      } else {
+        console.error('Error en la búsqueda:', response.statusText)
+        setSearchResults([])
+        setShowDropdown(false)
+      }
+    } catch (error) {
+      console.error('Error de red:', error)
+      setSearchResults([])
+      setShowDropdown(false)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Debounce para la búsqueda
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      buscarCursos(query)
+    }, 300)
+
+    return () => clearTimeout(timeoutId)
+  }, [query])
+
+  // Función de búsqueda completa
   const buscarCompleto = () => {
     if (!query.trim()) return
 
+    setShowDropdown(false)
     setIsLoading(true)
     
     // Redirigir a la página de cursos con el término de búsqueda
@@ -49,6 +126,96 @@ const SearchSection: React.FC = () => {
   // Limpiar búsqueda
   const limpiarBusqueda = () => {
     setQuery('')
+    setSearchResults([])
+    setShowDropdown(false)
+    setSelectedIndex(-1)
+  }
+
+  // Manejar navegación con teclado
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showDropdown || searchResults.length === 0) {
+      if (e.key === 'Enter') {
+        buscarCompleto()
+      }
+      return
+    }
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setSelectedIndex(prev => 
+          prev < searchResults.length - 1 ? prev + 1 : prev
+        )
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setSelectedIndex(prev => prev > 0 ? prev - 1 : -1)
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (selectedIndex >= 0 && selectedIndex < searchResults.length) {
+          const selectedCourse = searchResults[selectedIndex]
+          window.location.href = `/courses/${selectedCourse.curso_id}`
+        } else {
+          buscarCompleto()
+        }
+        break
+      case 'Escape':
+        setShowDropdown(false)
+        setSelectedIndex(-1)
+        inputRef.current?.blur()
+        break
+    }
+  }
+
+  // Agregar al carrito
+  const handleAddToCart = (course: Curso, e: React.MouseEvent) => {
+    e.stopPropagation()
+    
+    const cart = JSON.parse(localStorage.getItem('cart') || '[]')
+    const existingItem = cart.find((item: any) => item.id === course.curso_id)
+    
+    if (!existingItem) {
+      const newItem = {
+        id: course.curso_id,
+        nombre: course.nombre,
+        precio: course.precio,
+        categoria: course.categoria,
+        instructor: course.instructor,
+        quantity: 1
+      }
+      cart.push(newItem)
+      localStorage.setItem('cart', JSON.stringify(cart))
+      setCartItems(prev => [...prev, course.curso_id])
+      
+      // Mostrar feedback visual mejorado
+      const button = e.target as HTMLElement
+      const originalText = button.textContent
+      const originalClasses = button.className
+      
+      button.textContent = '✓ Agregado'
+      button.className = originalClasses.replace('bg-green-400', 'bg-green-500').replace('hover:bg-green-500', '') + ' cart-button-success'
+      
+      setTimeout(() => {
+        button.textContent = originalText
+        button.className = originalClasses
+      }, 2000)
+      
+      // Efecto de contador en el carrito (si existe)
+      const cartIcon = document.querySelector('.cart-counter')
+      if (cartIcon) {
+        cartIcon.classList.add('animate-bounce')
+        setTimeout(() => cartIcon.classList.remove('animate-bounce'), 1000)
+      }
+    }
+  }
+
+  // Formatear precio
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat('es-PE', {
+      style: 'currency',
+      currency: 'PEN'
+    }).format(price)
   }
 
   return (
@@ -59,14 +226,16 @@ const SearchSection: React.FC = () => {
             ¿Qué quieres aprender hoy?
           </h2>
           
-          <div className="relative">
+          <div className="relative" ref={searchRef}>
             <div className="relative">
               <input
+                ref={inputRef}
                 type="text"
                 placeholder="Buscar cursos, instructores, categorías..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && buscarCompleto()}
+                onKeyDown={handleKeyDown}
+                onFocus={() => query.length >= 2 && searchResults.length > 0 && setShowDropdown(true)}
                 className="w-full px-4 sm:px-6 py-3 sm:py-4 text-base sm:text-lg bg-white text-black border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent pr-32 sm:pr-36"
               />
               
@@ -95,6 +264,108 @@ const SearchSection: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {/* Dropdown con resultados de búsqueda */}
+            {showDropdown && (
+              <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 mt-2 max-h-96 overflow-y-auto search-dropdown">
+                {isLoading ? (
+                  <div className="p-4 text-center search-loading">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-green-400" />
+                    <p className="text-gray-600">Buscando cursos...</p>
+                  </div>
+                ) : searchResults.length > 0 ? (
+                  <div className="py-2">
+                    <div className="px-4 py-2 text-xs text-gray-500 border-b">
+                      {searchResults.length} resultados encontrados
+                    </div>
+                    {searchResults.map((course, index) => {
+                      const isInCart = cartItems.includes(course.curso_id)
+                      const isSelected = index === selectedIndex
+                      
+                      return (
+                        <div
+                          key={course.curso_id}
+                          className={`px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 transition-colors search-item ${
+                            isSelected ? 'bg-green-50 border-green-200' : ''
+                          }`}
+                          onClick={() => window.location.href = `/courses/${course.curso_id}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-semibold text-gray-900 truncate text-sm">
+                                {course.highlight?.nombre ? (
+                                  <span dangerouslySetInnerHTML={{ 
+                                    __html: course.highlight.nombre[0]
+                                  }} />
+                                ) : (
+                                  course.nombre
+                                )}
+                              </h4>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-xs text-gray-600">
+                                  Por {course.instructor}
+                                </span>
+                                <span className="inline-block w-1 h-1 bg-gray-400 rounded-full"></span>
+                                <span className="text-xs text-gray-600 capitalize">
+                                  {course.categoria}
+                                </span>
+                                <span className="inline-block w-1 h-1 bg-gray-400 rounded-full"></span>
+                                <span className="text-xs text-gray-600 capitalize">
+                                  {course.nivel}
+                                </span>
+                              </div>
+                              {course.snippet && (
+                                <p className="text-xs text-gray-500 mt-1 truncate">
+                                  {course.snippet}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 ml-4">
+                              <div className="text-right">
+                                <div className="font-bold text-green-600 text-sm">
+                                  {formatPrice(course.precio)}
+                                </div>
+                                {course.score && (
+                                  <div className="text-xs text-gray-500">
+                                    Score: {course.score.toFixed(1)}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                onClick={(e) => handleAddToCart(course, e)}
+                                disabled={isInCart}
+                                className={`px-3 py-1 rounded text-xs font-semibold transition-all duration-200 ${
+                                  isInCart
+                                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                                    : 'bg-green-400 text-black hover:bg-green-500 hover:scale-105'
+                                }`}
+                              >
+                                {isInCart ? '✓ En carrito' : 'Agregar'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <div className="px-4 py-3 border-t bg-gray-50">
+                      <button
+                        onClick={buscarCompleto}
+                        className="w-full text-center text-sm text-green-600 hover:text-green-700 font-semibold transition-colors"
+                      >
+                        Ver todos los resultados para "{query}" →
+                      </button>
+                    </div>
+                  </div>
+                ) : query.length >= 2 ? (
+                  <div className="p-4 text-center">
+                    <p className="text-gray-600">No se encontraron cursos</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Intenta con otros términos de búsqueda
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         </div>
       </div>
